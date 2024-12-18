@@ -1,0 +1,82 @@
+import os
+import threading
+from web3 import Web3
+from eth_account import Account
+from eth_account.signers.local import LocalAccount
+from typing import List
+
+# Настройка подключения к сети Linea
+LINEA_RPC_URL = "https://linea-mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID"  # Замените на ваш RPC URL
+BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD"  # Адрес сжигания
+PRIVATE_KEYS_FILE = "private.txt"  # Файл с приватными ключами
+NUM_THREADS = 5  # Количество потоков
+
+# Инициализация Web3
+web3 = Web3(Web3.HTTPProvider(LINEA_RPC_URL))
+
+def load_private_keys(file_path: str) -> List[str]:
+    """Загружает приватные ключи из файла."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Файл {file_path} не найден.")
+    with open(file_path, "r") as file:
+        return [line.strip() for line in file.readlines()]
+
+def burn_tokens(private_key: str):
+    """Сжигает все токены на адрес сжигания."""
+    try:
+        # Создаем аккаунт из приватного ключа
+        account: LocalAccount = Account.from_key(private_key)
+        address = account.address
+
+        # Получаем баланс ETH
+        balance = web3.eth.get_balance(address)
+        if balance == 0:
+            print(f"Адрес {address} не имеет ETH. Пропускаем.")
+            return
+
+        # Создаем транзакцию
+        tx = {
+            "to": BURN_ADDRESS,
+            "value": balance,
+            "gas": 21000,
+            "gasPrice": web3.to_wei("10", "gwei"),  # Укажите актуальную цену газа
+            "nonce": web3.eth.get_transaction_count(address),
+            "chainId": 59144,  # Chain ID для Linea
+        }
+
+        # Подписываем транзакцию
+        signed_tx = web3.eth.account.sign_transaction(tx, private_key)
+
+        # Отправляем транзакцию
+        tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        print(f"Транзакция отправлена: {web3.to_hex(tx_hash)}")
+
+    except Exception as e:
+        print(f"Ошибка при обработке приватного ключа: {e}")
+
+def main():
+    # Загружаем приватные ключи
+    private_keys = load_private_keys(PRIVATE_KEYS_FILE)
+    print(f"Загружено {len(private_keys)} приватных ключей.")
+
+    # Создаем потоки
+    threads = []
+    for private_key in private_keys:
+        thread = threading.Thread(target=burn_tokens, args=(private_key,))
+        threads.append(thread)
+        thread.start()
+
+        # Ограничиваем количество одновременно работающих потоков
+        if len(threads) >= NUM_THREADS:
+            for t in threads:
+                t.join()
+            threads = []
+
+    # Ждем завершения оставшихся потоков
+    for t in threads:
+        t.join()
+
+    print("Все транзакции выполнены.")
+
+if __name__ == "__main__":
+    main()
